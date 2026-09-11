@@ -65,7 +65,7 @@ Adicionalmente, el firmware calcula en segundo plano:
 
 - **Tasa real de cambio de nivel** (%/hora), medida en ventanas de 2 minutos.
 - **Pérdida esperada por evaporación** (%/hora), derivada del índice.
-- **Pérdida extra**, la diferencia entre ambas — reportada por Serial como base para un futuro modelo predictivo de fugas o consumo anómalo (ver [Trabajo futuro](#-trabajo-futuro)).
+- **Pérdida extra**, la diferencia entre ambas — reportada por Serial como base para un futuro modelo predictivo de fugas o consumo anómalo.
 
 📄 Detalle completo del modelo: [08. Lógica de fusión — sección 8.8](../../wiki/08.-Logica-de-fusion) · [Anexos — Bibliografía](../../wiki/15.-Anexos)
 
@@ -142,8 +142,6 @@ Challenge-IOT/
 | 15 | [Anexos](../../wiki/15.-Anexos) |
 
 ---
-
-
 
 ## 📚 Bibliografía
 
