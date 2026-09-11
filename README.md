@@ -143,20 +143,7 @@ Challenge-IOT/
 
 ---
 
-## 🔭 Trabajo futuro
 
-- Incorporar un sensor de caudal.
-- Incorporar un sensor de presión atmosférica.
-- Mejorar la calibración del sensor UV.
-- Incorporar un sistema de alimentación solar.
-- Añadir almacenamiento de datos.
-- Incorporar comunicación LoRa.
-- Implementar múltiples estaciones.
-- Desarrollar una plataforma de monitoreo remoto.
-- **Implementar modelos predictivos** — *primer avance: indicador informativo de evaporación (Hargreaves-Samani).*
-- Mejorar la precisión de la estimación del riesgo, evolucionando el indicador de evaporación hacia una detección activa de fugas o consumo anómalo.
-
----
 
 ## 📚 Bibliografía
 
