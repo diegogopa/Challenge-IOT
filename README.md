@@ -1,112 +1,68 @@
-# 💧 AquaMonitor — Sistema IoT de Monitoreo de Disponibilidad y Escasez de Agua
+# 💧 AquaMonitor v3.2 — Sistema IoT de monitoreo de disponibilidad y escasez de agua
 
 ![Platform](https://img.shields.io/badge/platform-ESP32-blue)
 ![Language](https://img.shields.io/badge/language-C%2B%2B%20(Arduino)-orange)
+![RTOS](https://img.shields.io/badge/FreeRTOS-tarea%20de%20sensado-green)
 ![License](https://img.shields.io/badge/license-Academic-lightgrey)
-![Status](https://img.shields.io/badge/status-Prototipo%20funcional-brightgreen)
 
-Prototipo funcional de Internet de las Cosas (IoT) para el monitoreo **local** de condiciones asociadas a la disponibilidad y escasez de agua en puntos críticos de almacenamiento de la región de Sabana Centro, Cundinamarca. Todo el procesamiento ocurre en el propio microcontrolador: no depende de Wi-Fi, Bluetooth, Internet ni servicios en la nube para detectar riesgos y generar alertas.
+Prototipo IoT de bajo costo para monitorear puntos críticos de almacenamiento de agua en la región Sabana Centro (Cundinamarca) durante el fenómeno de El Niño 2026. Mide nivel de agua y variables meteorológicas, las combina mediante **lógica de fusión** y emite alertas **in situ** (OLED + buzzer) y en un **tablero de control web embebido** en el ESP32, accesible solo desde la WLAN de la zona.
 
-📖 Documentación completa del proyecto: **[Wiki del repositorio](../../wiki)**
+📖 Documentación completa: **[Wiki del proyecto](../../wiki)** · 🎥 Video: `[ENLACE]`
 
 ---
 
 ## 👥 Equipo
 
-**Universidad de La Sabana — Facultad de Ingeniería**
-Internet de las Cosas · 2026-2
+Universidad de La Sabana — Facultad de Ingeniería · Internet de las Cosas 2026-2
 
-| Rol | Nombre |
+| Integrante | Rol |
 |---|---|
-| Integrante | Victor Andrés Luna |
-| Integrante | Federico Valdez Muñoz |
-| Integrante | Diego Alejandro Gómez |
-| Profesor | Andrés Felipe Beltrán |
+| Victor Andrés Luna | Hardware e integración |
+| Federico Valdez Muñoz | Software y pruebas |
+| Diego Alejandro Gómez | Documentación e integración |
+| **Profesor:** Andrés Felipe Beltrán | |
 
 ---
 
-## 📌 Resumen
+## 🧩 Sensores y actuadores
 
-El sistema utiliza un **ESP32 DevKit V1** como unidad central de procesamiento e integra tres sensores para obtener información sobre el nivel de agua y las condiciones ambientales de un tanque o recipiente de almacenamiento:
-
-| Sensor | Variable | Rol en el sistema |
-|---|---|---|
-| **HC-SR04** | Distancia a la superficie del agua | Estima el porcentaje de nivel del tanque |
-| **DHT22** | Temperatura y humedad relativa | Contexto ambiental / indicador de evaporación |
-| **GUVA-S12SD** | Radiación UV (señal analógica) | Categoría de riesgo UV / indicador de evaporación |
-
-El estado de alarma del sistema depende del **nivel de agua**, y se muestra en tiempo real en una pantalla **OLED I2C** (SH1106G), con un **buzzer activo** que avisa de forma sonora cuando se alcanza una condición de riesgo.
+| Componente | Variable / función | Interfaz | Pin ESP32 |
+|---|---|---|---|
+| HC-SR04 | Distancia → nivel (%) | TRIG / ECHO | GPIO 5 / GPIO 18 |
+| DHT22 | Temperatura y humedad | 1 hilo | GPIO 4 |
+| GUVA-S12SD | Radiación UV → índice UV | ADC | GPIO 34 |
+| BMP180 | Presión atmosférica | I2C 0x77 | SDA 21 / SCL 23 |
+| OLED SH1106 128×64 | Visualización local | I2C 0x3C | SDA 21 / SCL 23 |
+| Buzzer activo | Alarma física | Digital | GPIO 33 |
 
 ---
 
-## 🚦 Estados del sistema
+## 🧠 Lógica de fusión
 
-| Estado | Condición |
+- **Nivel:** mediana de 5 disparos + EMA (α = 0.5), velocidad del sonido compensada con la temperatura del DHT22.
+- **Índice de evaporación (0–100):** 0.40·T + 0.30·UV + 0.30·(100 − HR), normalizados.
+- **Tendencia de presión:** caída ≥ 2 hPa en 3 h.
+
+| Estado | Regla (prioridad de arriba a abajo) |
 |---|---|
-| 🔵 **OK** | Nivel entre 20% y 95% |
-| 🟡 **SEQUIA** | Nivel ≤ 20% |
-| 🔴 **DESBORDE** | Nivel ≥ 95% |
+| `ERROR_SENSOR` | 5 ciclos seguidos sin eco válido del HC-SR04 |
+| `DESBORDE` | nivel ≥ 95 % (sale con < 90 %) |
+| `FUGA` | el nivel baja y la pérdida real supera a la esperada por evaporación en ≥ 2.5 %/h |
+| `SEQUIA` | nivel ≤ 20 % (sale con > 25 %), **o** nivel ≤ 35 % con evaporación ≥ 70 (≥ 55 si la presión está cayendo) |
+| `OK` | ninguna de las anteriores |
 
-Mientras el estado sea distinto de `OK`, el buzzer parpadea cada 400 ms y el encabezado del OLED se invierte mostrando el mensaje de alerta correspondiente.
-
----
-
-## 🆕 Novedad: indicador informativo de evaporación potencial
-
-Se agregó un **índice de evaporación (0-100)** que fusiona temperatura, humedad relativa y radiación UV, inspirado en una adaptación simplificada del método **Hargreaves-Samani** de estimación de evapotranspiración (ver [Bibliografía](#-bibliografía)).
-
-```
-Índice de evaporación = (Temperatura × 0.40) + (UV × 0.30) + (Humedad × 0.30)
-```
-
-Este índice se muestra en el OLED como **"EVP:xx%"** junto a la categoría UV. Es un dato **puramente informativo**, con el mismo rol que ya tenían la radiación UV y la tendencia de nivel: **no altera el estado de alarma ni el buzzer**, siguiendo la misma filosofía de diseño documentada en la sección *8.1* de la wiki.
-
-Adicionalmente, el firmware calcula en segundo plano:
-
-- **Tasa real de cambio de nivel** (%/hora), medida en ventanas de 2 minutos.
-- **Pérdida esperada por evaporación** (%/hora), derivada del índice.
-- **Pérdida extra**, la diferencia entre ambas — reportada por Serial como base para un futuro modelo predictivo de fugas o consumo anómalo.
-
-📄 Detalle completo del modelo: [08. Lógica de fusión — sección 8.8](../../wiki/08.-Logica-de-fusion) · [Anexos — Bibliografía](../../wiki/15.-Anexos)
+Además, cada componente (DHT22, BMP180, GUVA, ultrasónico, OLED, WiFi) tiene detección de falla y recuperación automática.
 
 ---
 
-## 🔌 Componentes de hardware
+## 🏗️ Arquitectura
 
-| Componente | Pin ESP32 |
-|---|---|
-| DHT22 (datos) | GPIO 4 |
-| GUVA-S12SD (analógico) | GPIO 34 |
-| HC-SR04 (TRIG) | GPIO 5 |
-| HC-SR04 (ECHO) | GPIO 18 |
-| Buzzer activo | GPIO 33 |
-| OLED SH1106G (I2C SDA) | GPIO 21 |
-| OLED SH1106G (I2C SCL) | GPIO 23 |
-
----
-
-## 🖥️ Entorno de desarrollo
-
-- **IDE:** Arduino IDE
-- **Placa:** `ESP32 Dev Module`
-- **Librerías requeridas:**
-  - `DHT sensor library`
-  - `Adafruit GFX Library`
-  - `Adafruit SH110X`
-
----
-
-## ⚙️ Funcionamiento general
-
-1. Muestra la animación de arranque ("AQUA MONITOR" + barra de progreso).
-2. Cada 1.5 s, lee temperatura, humedad, voltaje UV y distancia.
-3. Calcula el nivel porcentual de agua y su tendencia respecto a la lectura anterior.
-4. Clasifica la radiación UV según el voltaje leído.
-5. Calcula el índice informativo de evaporación potencial.
-6. Determina el estado del sistema (`OK` / `SEQUIA` / `DESBORDE`) según el nivel de agua.
-7. Si el estado no es `OK`, hace parpadear el buzzer y el encabezado del OLED.
-8. Actualiza continuamente el OLED: barra de nivel animada, iconos, tendencia, categoría UV, índice de evaporación e indicador de actividad.
-9. Envía todas las lecturas al monitor serial para depuración (115200 baudios).
+- **Tarea FreeRTOS `tareaSensado`** (núcleo 1): medición, filtrado, fusión, eventos e histórico — independiente del hilo principal.
+- **`loop()`**: buzzer, OLED, reconexión WiFi y verificación de la OLED.
+- **Servidor web asíncrono**: `GET /`, `GET /data`, `GET /historico`, `POST /silenciar`.
+- **Sincronización:** `mutexDatos` (datos compartidos) y `mutexI2C` (bus OLED + BMP180).
+- **Acceso al tablero:** solo IPs de la subred de la WLAN (403 si no) + usuario y contraseña (401 si no). Sin MQTT ni nube.
+- Si la WLAN cae, la medición y las alertas locales siguen funcionando.
 
 ---
 
@@ -114,48 +70,29 @@ Adicionalmente, el firmware calcula en segundo plano:
 
 ```
 Challenge-IOT/
-├── AquaMonitor.ino     # Firmware principal (ESP32)
-├── README.md           # Este archivo
-└── docs/                # Diagramas y evidencia fotográfica (si aplica)
+├── firmware/
+│   └── AquaMonitor_v3_2/
+│       └── AquaMonitor_v3_2.ino   # Firmware principal
+├── docs/
+│   ├── esquematico/               # Esquemático (PNG/PDF + fuente)
+│   ├── actas/                     # Actas de reunión
+│   ├── pruebas/                   # Datos crudos del banco de pruebas (CSV)
+│   └── fotos/                     # Prototipo, OLED y tablero
+└── README.md
 ```
 
 ---
 
-## 🗺️ Documentación (Wiki)
+## ⚙️ Compilación
 
-| # | Página |
-|---|---|
-| 01 | [Información del proyecto](../../wiki/01.-Informacion-del-proyecto) |
-| 02 | [Contexto, problema y objetivos](../../wiki/02.-Contexto-problema-y-objetivos) |
-| 03 | [Requisitos y restricciones](../../wiki/03.-Requisitos-y-restricciones) |
-| 04 | [Componentes y selección tecnológica](../../wiki/04.-Componentes-y-seleccion-tecnologica) |
-| 05 | [Arquitectura del sistema](../../wiki/05.-Arquitectura-del-sistema) |
-| 06 | [Diseño de hardware](../../wiki/06.-Diseno-de-hardware) |
-| 07 | [Diseño de software](../../wiki/07.-Diseno-de-software) |
-| 08 | [Lógica de fusión](../../wiki/08.-Logica-de-fusion) |
-| 09 | [Implementación](../../wiki/09.-Implementacion) |
-| 10 | [Configuración experimental](../../wiki/10.-Configuracion-experimental) |
-| 11 | [Pruebas y resultados](../../wiki/11.-Pruebas-y-resultados) |
-| 12 | [Autoevaluación](../../wiki/12.-Autoevaluacion) |
-| 13 | [Modelo de negocio](../../wiki/13.-Modelo-de-negocio) |
-| 14 | [Conclusiones y trabajo futuro](../../wiki/14.-Conclusiones-y-trabajo-futuro) |
-| 15 | [Anexos](../../wiki/15.-Anexos) |
-
----
-
-## 📚 Bibliografía
-
-- Hargreaves, G. H., & Samani, Z. A. (1985). Reference crop evapotranspiration from temperature. *Applied Engineering in Agriculture, 1*(2), 96–99.
-- Allen, R. G., Pereira, L. S., Raes, D., & Smith, M. (1998). *Crop Evapotranspiration — Guidelines for Computing Crop Water Requirements* (FAO Irrigation and Drainage Paper 56). FAO, Rome. https://www.fao.org/4/x0490e/x0490e00.htm
-- Hargreaves, G. H., & Allen, R. G. (2003). History and evaluation of Hargreaves evapotranspiration equation. *Journal of Irrigation and Drainage Engineering, 129*(1), 53–63. https://doi.org/10.1061/(ASCE)0733-9437(2003)129:1(53)
-- Genicom Co., Ltd. (2011). *GUVA-S12SD UV-B Sensor — Technical Data*. https://cdn-shop.adafruit.com/datasheets/1918guva.pdf
-- Espressif Systems. *ESP32 Series Datasheet*. https://www.espressif.com/en/products/socs/esp32
-- Adafruit Industries. *Adafruit_SH110X Arduino Library*. https://github.com/adafruit/Adafruit_SH110X
-
-> **Nota:** la ecuación original de Hargreaves-Samani usa temperatura máxima/mínima y radiación extraterrestre por latitud, no un sensor UV directo. El índice implementado en este proyecto es una heurística inspirada en esa lógica, adaptada a los sensores disponibles en el prototipo — no la fórmula FAO-56 aplicada de forma literal.
+1. Arduino IDE con el núcleo **esp32 by Espressif Systems**; placa **ESP32 Dev Module**.
+2. Librerías: `DHT sensor library`, `Adafruit GFX Library`, `Adafruit SH110X`, `Adafruit BMP085 Library`, `ESPAsyncWebServer`, `AsyncTCP`.
+3. Editar `WIFI_SSID`, `WIFI_PASS`, `WEB_USER` y `WEB_PASS` (el repositorio solo tiene valores de ejemplo).
+4. Ajustar `DIST_TANQUE_LLENO` y `DIST_TANQUE_VACIO` a la geometría del tanque.
+5. Cargar, abrir el monitor serie a 115200 baudios y entrar a la IP que muestra la OLED desde un dispositivo de la misma WLAN.
 
 ---
 
 ## 📄 Licencia
 
-Proyecto académico desarrollado para el curso de Internet de las Cosas — Universidad de La Sabana, 2026-2.
+Proyecto académico — Universidad de La Sabana, 2026-2.
