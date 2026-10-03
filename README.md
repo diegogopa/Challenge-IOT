@@ -7,7 +7,6 @@
 
 Prototipo IoT de bajo costo para monitorear puntos críticos de almacenamiento de agua en la región Sabana Centro (Cundinamarca) durante el fenómeno de El Niño 2026. Mide nivel de agua y variables meteorológicas, las combina mediante **lógica de fusión** y emite alertas **in situ** (OLED + buzzer) y en un **tablero de control web embebido** en el ESP32, accesible solo desde la WLAN de la zona.
 
-📖 Documentación completa: **[Wiki del proyecto](../../wiki)** · 🎥 Video: `[ENLACE]`
 
 ---
 
