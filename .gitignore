@@ -9,3 +9,6 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+# Respaldos del Gateway (tienen token y claves)
+respaldo_aquamonitor_*.tgz
+*.tgz

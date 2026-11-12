@@ -61,6 +61,12 @@ def cargar_config(ruta):
             "device": g("ubidots", "device_label", "aquamonitor-est01"),
             "intervalo_s": int(g("ubidots", "intervalo_s", "60")),
             "max_lotes": int(g("ubidots", "max_lotes_por_envio", "20")),
+            # Plan STEM: max. 10 variables por dispositivo, 4000 puntos/dia y 1 envio/s.
+            # device_label_control separa en otro dispositivo el interruptor, la conexion, los eventos y la IA.
+            "device_ctl": g("ubidots", "device_label_control", "") or g("ubidots", "device_label", "aquamonitor-est01"),
+            "variables": [v.strip() for v in g("ubidots", "variables", ",".join(VARIABLES_NUBE)).split(",")
+                          if v.strip() in VARIABLES_NUBE],
+            "min_s_entre_envios": float(g("ubidots", "min_s_entre_envios", "0")),
         },
         "ia": {
             "enabled": g("ia", "enabled", "true").lower() == "true",
@@ -69,9 +75,11 @@ def cargar_config(ruta):
             "min_puntos": int(g("ia", "min_puntos", "6")),
             "min_span_s": int(g("ia", "min_span_min", "20")) * 60,
             "nivel_critico": float(g("ia", "nivel_critico", "20")),
+            # ia_alerta = 1 cuando el pronostico llega al nivel critico en este numero de horas o menos
+            "horas_alerta": float(g("ia", "horas_alerta", "72")),
             "umbral_z": float(g("ia", "umbral_z", "3.5")),
             "gemini_key": g("ia", "gemini_api_key", ""),
-            "gemini_model": g("ia", "gemini_model", "gemini-2.5-flash"),
+            "gemini_model": g("ia", "gemini_model", "gemini-3.5-flash-lite"),
             "gemini_min_interval_s": int(g("ia", "gemini_min_interval_s", "1800")),
         },
         "db": {"path": g("db", "path", "aquamonitor.db"), "retencion_dias": int(g("db", "retencion_dias", "30"))},
@@ -118,6 +126,7 @@ class Gateway:
         self.eventos_pendientes = threading.Event()
         self.ultimo_estado = {}
         self.nube_ok = False
+        self.esp32_online = None      # ultimo estado conocido del ESP32 (1/0), se reenvia al reconectar con la nube
 
         # --- cliente del broker local (Mosquitto) ---
         self.local = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"gateway-{self.est}")
@@ -131,8 +140,11 @@ class Gateway:
         u = cfg["ubidots"]
         self.nube = None
         if u["enabled"]:
-            self.t_nube = f"/v1.6/devices/{u['device']}"
-            self.t_silenciar = f"/v1.6/devices/{u['device']}/silenciar/lv"
+            self.t_nube = f"/v1.6/devices/{u['device']}"                 # mediciones
+            self.t_ctl = f"/v1.6/devices/{u['device_ctl']}"              # interruptor, conexion, eventos, IA
+            self.t_silenciar = f"/v1.6/devices/{u['device_ctl']}/silenciar/lv"
+            self.t_ultimo_envio = 0.0
+            self.lock_envio = threading.Lock()
             self.nube = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"aqm-gw-{self.est}-{os.getpid()}")
             self.nube.username_pw_set(u["token"], "")   # Ubidots: usuario = token, clave vacia
             if u["tls"]:
@@ -170,7 +182,8 @@ class Gateway:
             elif tipo == "estado":
                 self.db.ejecutar("INSERT INTO conexion(ts, estacion, estado) VALUES (?,?,?)", (ahora, est, texto))
                 log.info("[%s] ESP32 %s", est, texto)
-                self._publicar_nube({"esp32_online": {"value": 1 if texto == "online" else 0}})
+                self.esp32_online = 1 if texto == "online" else 0
+                self._publicar_nube({"esp32_online": {"value": self.esp32_online}}, ctl=True)
         except (ValueError, KeyError) as e:
             log.warning("Mensaje invalido en %s: %s (%s)", msg.topic, texto[:120], e)
 
@@ -218,7 +231,12 @@ class Gateway:
             log.info("Conectado a Ubidots")
             cli.subscribe(self.t_silenciar, 1)
             # crea/deja en 0 la variable del interruptor para que exista en el tablero
-            cli.publish(self.t_nube, json.dumps({"silenciar": {"value": 0}}), qos=1)
+            inicial = {"silenciar": {"value": 0}}
+            # Si el ESP32 cambio de estado mientras no habia nube (arranque o corte de Internet),
+            # el aviso se habria perdido: se reenvia el ultimo estado conocido al reconectar.
+            if self.esp32_online is not None:
+                inicial["esp32_online"] = {"value": self.esp32_online}
+            cli.publish(self.t_ctl, json.dumps(inicial), qos=1)
         else:
             log.error("Ubidots rechazo la conexion (revise el token): %s", rc)
 
@@ -242,12 +260,17 @@ class Gateway:
         if info.rc == mqtt.MQTT_ERR_SUCCESS:
             self.db.ejecutar("UPDATE ordenes SET reenviada=1 WHERE id=?", (cur.lastrowid,))
         log.info("Orden 'silenciar' desde Ubidots reenviada al ESP32 (%s)", topic)
-        self._publicar_nube({"silenciar": {"value": 0}})    # deja el interruptor listo para la proxima
+        self._publicar_nube({"silenciar": {"value": 0}}, ctl=True)   # deja el interruptor listo para la proxima
 
-    def _publicar_nube(self, payload, esperar=False):
+    def _publicar_nube(self, payload, esperar=False, ctl=False):
         if not (self.nube and self.nube_ok):
             return False
-        info = self.nube.publish(self.t_nube, json.dumps(payload), qos=1)
+        with self.lock_envio:                               # respeta el limite de envios por segundo del plan
+            espera = self.cfg["ubidots"]["min_s_entre_envios"] - (time.time() - self.t_ultimo_envio)
+            if espera > 0:
+                time.sleep(espera)
+            self.t_ultimo_envio = time.time()
+            info = self.nube.publish(self.t_ctl if ctl else self.t_nube, json.dumps(payload), qos=1)
         if esperar:
             try:
                 info.wait_for_publish(timeout=5)
@@ -278,6 +301,8 @@ class Gateway:
             ts_ms = int(grupo[-1][1] * 1000)
             payload = {}
             for i, nombre in enumerate(VARIABLES_NUBE, start=2):
+                if nombre not in self.cfg["ubidots"]["variables"]:
+                    continue
                 vals = [f[i] for f in validas if f[i] is not None]
                 if vals:
                     payload[nombre] = {"value": round(sum(vals) / len(vals), 2), "timestamp": ts_ms}
@@ -300,7 +325,7 @@ class Gateway:
                 "SELECT id, ts, evento, codigo FROM eventos WHERE enviado=0 AND estacion=? ORDER BY ts", (self.est,)):
             payload = {"evento": {"value": cod if cod is not None else -1, "timestamp": int(ts * 1000),
                                   "context": {"evento": ev, "estacion": self.est}}}
-            if not self._publicar_nube(payload, esperar=True):
+            if not self._publicar_nube(payload, esperar=True, ctl=True):
                 return
             self.db.ejecutar("UPDATE eventos SET enviado=1 WHERE id=?", (id_,))
 
@@ -328,7 +353,9 @@ class Gateway:
             "ia_horas_critico": {"value": horas, "context": {"recomendacion": res["recomendacion"],
                                                              "fuente": res["fuente"]}},
             "ia_anomalia": {"value": 1 if res["anomalia"] else 0},
-        })
+            # una sola variable 0/1 para la notificacion "pronostico critico" (no necesita condiciones compuestas)
+            "ia_alerta": {"value": 1 if 0 <= horas <= self.cfg["ia"]["horas_alerta"] else 0},
+        }, ctl=True)
 
     # ------------------------------------------------------------------ ciclo
     def _limpieza(self):

@@ -24,6 +24,7 @@ Ubidots (interruptor "silenciar") ──► Gateway ──► aquamonitor/est01/
 | `instalar_gateway.sh` | Instalación en la Raspberry Pi |
 | `simulador_esp32.py` | Publica como si fuera el ESP32 (pruebas sin hardware) |
 | `reporte_pruebas.py` | Persistencia, pendientes, eventos, órdenes e IA desde la base (y exporta CSV) |
+| `respaldar.sh` / `restaurar.sh` | Guardan y recuperan `gateway.ini`, las claves MQTT y la base de datos |
 
 ## Instalación en la Raspberry Pi
 
@@ -40,6 +41,27 @@ Ubidots (interruptor "silenciar") ──► Gateway ──► aquamonitor/est01/
    sudo systemctl start aquamonitor-gateway
    journalctl -u aquamonitor-gateway -f
    ```
+
+## Respaldo y restauración
+
+La configuración (`gateway.ini`, claves MQTT) y la base de datos solo existen en la SD. Antes de devolver o reformatear la Raspberry Pi:
+
+```bash
+cd ~/gateway
+sudo bash respaldar.sh            # crea ~/respaldo_aquamonitor_AAAAMMDD_HHMM.tgz
+```
+
+Y copiarlo al PC (desde PowerShell): `scp pi@<IP_RPI>:~/respaldo_aquamonitor_*.tgz .`
+**El respaldo tiene el token y las claves: guardarlo en privado, nunca en GitHub.**
+
+Para restaurar en una SD nueva: grabar Raspberry Pi OS con Imager (hostname `aquamonitor`, usuario `pi`, SSH activado y la Wi-Fi donde estará el ESP32), copiar la carpeta `gateway/` y el `.tgz`, y ejecutar:
+
+```bash
+cd ~/gateway
+sudo bash restaurar.sh ~/respaldo_aquamonitor_AAAAMMDD_HHMM.tgz
+```
+
+Deja instalado Mosquitto con las mismas claves, el Gateway con la misma configuración y la base con todo el histórico de pruebas.
 
 ## Comprobaciones rápidas
 

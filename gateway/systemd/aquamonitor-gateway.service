@@ -3,7 +3,9 @@
 Description=AquaMonitor - Gateway IoT (MQTT -> SQLite -> IA -> Ubidots)
 After=network-online.target mosquitto.service
 Wants=network-online.target
-Requires=mosquitto.service
+# Wants (no Requires): si Mosquitto se detiene o reinicia, el Gateway sigue vivo y se reconecta solo.
+# Con Requires, systemd detenia el Gateway junto con Mosquitto y no lo volvia a iniciar.
+Wants=mosquitto.service
 
 [Service]
 Type=simple

@@ -4,9 +4,12 @@ Modulo de IA del Gateway AquaMonitor.
 Dos partes, con responsabilidades separadas:
 
 1. IA predictiva (modelo propio, sin dependencias externas):
-   - Pronostico: regresion lineal por minimos cuadrados sobre el nivel
-     reciente guardado en SQLite -> pendiente (%/h) -> horas que faltan
-     para llegar al nivel critico.
+   - Pronostico: recta robusta de Theil-Sen (mediana de las pendientes entre
+     pares de puntos) sobre la mediana del nivel por minuto guardado en
+     SQLite, sin los periodos en DESBORDE -> pendiente (%/h) -> horas que
+     faltan para llegar al nivel critico. Es robusta a saltos y lecturas
+     atipicas (p. ej. una mano frente al sensor), a diferencia de minimos
+     cuadrados, que se deja arrastrar por ellos.
    - Deteccion de anomalias: puntaje z robusto (mediana y MAD) de la tasa
      de cambio mas reciente frente a su historial. Un descenso muy por
      fuera de lo habitual se marca como anomalia.
@@ -20,6 +23,7 @@ Dos partes, con responsabilidades separadas:
 """
 import json
 import logging
+import pathlib
 import sqlite3
 import statistics
 import time
@@ -48,29 +52,69 @@ def regresion_lineal(xs, ys):
     return m, b, r2
 
 
+def theil_sen(xs, ys):
+    """Recta robusta: pendiente = mediana de las pendientes entre todos los pares;
+    intercepto = mediana de (y - m*x). Tolera hasta ~29 % de puntos atipicos.
+    Devuelve (pendiente, intercepto, r2)."""
+    n = len(xs)
+    pendientes = [(ys[j] - ys[i]) / (xs[j] - xs[i])
+                  for i in range(n) for j in range(i + 1, n) if xs[j] != xs[i]]
+    if not pendientes:
+        return 0.0, statistics.median(ys), 0.0
+    m = statistics.median(pendientes)
+    b = statistics.median(y - m * x for x, y in zip(xs, ys))
+    my = sum(ys) / n
+    ss_tot = sum((y - my) ** 2 for y in ys)
+    ss_res = sum((y - (m * x + b)) ** 2 for x, y in zip(xs, ys))
+    r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 0.0
+    return m, b, r2
+
+
+def mediana_por_minuto(serie):
+    """Agrupa (ts, nivel) por minuto y toma la mediana: quita ruido y limita el calculo
+    (6 h -> maximo 360 puntos)."""
+    grupos = {}
+    for t, n in serie:
+        grupos.setdefault(int(t // 60), []).append(n)
+    return [(k * 60 + 30, statistics.median(v)) for k, v in sorted(grupos.items())]
+
+
 def pronostico_nivel(serie, nivel_critico, min_puntos=6, min_span_s=1200,
-                     pendiente_minima=0.05):
+                     pendiente_minima=0.05, reciente_s=1800, pendiente_reciente_estable=-1.0):
     """
     serie: lista de (ts_epoch_s, nivel_%) ordenada por tiempo.
     Devuelve dict con nivel actual estimado, pendiente (%/h), r2 y
     horas_critico (-1 si el nivel esta estable o subiendo, None si no hay
     datos suficientes).
     """
+    nivel_ultimo = serie[-1][1] if serie else None
+    serie = mediana_por_minuto(serie)
     if len(serie) < min_puntos or serie[-1][0] - serie[0][0] < min_span_s:
         return {"horas_critico": None, "pendiente": None, "r2": None,
-                "nivel": serie[-1][1] if serie else None, "puntos": len(serie)}
+                "nivel": nivel_ultimo, "puntos": len(serie)}
     t0 = serie[0][0]
     xs = [(t - t0) / 3600.0 for t, _ in serie]          # horas
     ys = [n for _, n in serie]
-    m, b, r2 = regresion_lineal(xs, ys)
+    m, b, r2 = theil_sen(xs, ys)
+    # Tendencia actual: si en los ultimos 30 min el nivel no baja (p. ej. hubo un salto o una
+    # fuga que ya se corrigio), la caida vieja no debe seguir disparando el pronostico.
+    recientes = [(x, y) for x, y in zip(xs, ys) if x >= xs[-1] - reciente_s / 3600.0]
+    estable_ahora = False
+    if len(recientes) >= 20 and m < -pendiente_minima:
+        m_rec = theil_sen([x for x, _ in recientes], [y for _, y in recientes])[0]
+        # "estable ahora" = la caida reciente es casi nula (> -1 %/h) Y mucho menor que la de
+        # toda la ventana (menos de 1/3). Un vaciado real y sostenido no cumple la segunda condicion.
+        estable_ahora = m_rec > max(pendiente_reciente_estable, m / 3)
     nivel_ajustado = min(100.0, max(0.0, m * xs[-1] + b))   # valor ajustado (menos ruido), acotado
-    nivel_medido = ys[-1]
+    nivel_medido = nivel_ultimo
     if nivel_medido <= nivel_critico or nivel_ajustado <= nivel_critico:
         horas = 0.0
-    elif m < -pendiente_minima:
+    elif m < -pendiente_minima and not estable_ahora:
         horas = (nivel_ajustado - nivel_critico) / (-m)
     else:
         horas = -1.0                                     # estable o subiendo
+    if estable_ahora:
+        m = m_rec          # se reporta la tendencia actual (la que se usa para decidir y la que lee Gemini)
     return {"horas_critico": round(horas, 2), "pendiente": round(m, 3),
             "r2": round(r2, 3), "nivel": round(nivel_medido, 1), "puntos": len(serie)}
 
@@ -137,7 +181,7 @@ PROMPT_SISTEMA = (
 )
 
 
-def recomendacion_gemini(ctx, api_key, modelo, timeout=15):
+def recomendacion_gemini(ctx, api_key, modelo, timeout=30):
     """Llama a la API de Gemini. Devuelve el texto o lanza excepcion."""
     datos = {
         "estado": ctx["estado"],
@@ -154,14 +198,17 @@ def recomendacion_gemini(ctx, api_key, modelo, timeout=15):
     cuerpo = {
         "systemInstruction": {"parts": [{"text": PROMPT_SISTEMA}]},
         "contents": [{"role": "user", "parts": [{"text": "Datos de la estacion: " + json.dumps(datos, ensure_ascii=False)}]}],
-        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 120},
+        # Margen amplio: los modelos recientes "piensan" antes de responder y esos tokens cuentan
+        # dentro del maximo; con un tope bajo la respuesta llega sin texto. El texto se recorta abajo.
+        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 2048},
     }
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent"
     req = urllib.request.Request(url, data=json.dumps(cuerpo).encode(), method="POST",
                                  headers={"Content-Type": "application/json", "x-goog-api-key": api_key})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         resp = json.loads(r.read().decode())
-    texto = resp["candidates"][0]["content"]["parts"][0]["text"].strip()
+    partes = resp.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+    texto = " ".join(p.get("text", "") for p in partes if not p.get("thought")).strip()
     texto = " ".join(texto.split())
     if not texto:
         raise ValueError("respuesta vacia")
@@ -187,7 +234,8 @@ class ModuloIA:
 
     def evaluar(self, estacion):
         # Conexion propia de solo lectura: la llamada a Gemini no bloquea las escrituras del Gateway.
-        conn = sqlite3.connect(f"file:{self.ruta_db}?mode=ro", uri=True, timeout=5)
+        # as_uri() arma la URI correcta en Linux (file:///opt/...) y en Windows (file:///C:/...)
+        conn = sqlite3.connect(pathlib.Path(self.ruta_db).resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
         try:
             return self._evaluar(conn, estacion)
         finally:
@@ -203,7 +251,9 @@ class ModuloIA:
         if not filas:
             return None
         ultima = filas[-1]
-        serie = [(f[0], f[1]) for f in filas if f[1] is not None and f[3] != "ERROR_SENSOR"]
+        # Sin lecturas invalidas ni periodos en DESBORDE: no son parte de la tendencia de consumo
+        serie = [(f[0], f[1]) for f in filas
+                 if f[1] is not None and f[3] not in ("ERROR_SENSOR", "DESBORDE")]
         pron = pronostico_nivel(serie, c["nivel_critico"], c["min_puntos"], c["min_span_s"])
 
         # historial de tasas (24 h); se toma un valor por cambio para no repetir la misma ventana

@@ -37,8 +37,8 @@
 // ============================================================
 
 // ---------------- CONFIGURACION ----------------
-const char* WIFI_SSID = "AquaMonitor";
-const char* WIFI_PASS = "12345678";
+const char* WIFI_SSID = "XXXXXXXXX";
+const char* WIFI_PASS = "XXXXX";
 const char* WEB_USER  = "admin";
 const char* WEB_PASS  = "cambiame";
 
@@ -49,7 +49,7 @@ const char* WEB_PASS  = "cambiame";
 const char* MQTT_HOST   = "aquamonitor.local"; // nombre (mDNS) o IP de la Raspberry Pi en la WLAN
 const uint16_t MQTT_PORT = 1883;
 const char* MQTT_USER   = "esp32_est01";      // usuario creado en Mosquitto (mosquitto_passwd)
-const char* MQTT_PASS   = "EspAqua2026";
+const char* MQTT_PASS   = "cambiame_mqtt";
 const char* ESTACION_ID = "est01";            // identificador de la estacion (temas MQTT)
 
 #define PERIODO_TELEMETRIA_MS 10000UL         // telemetria cada 10 s
@@ -323,11 +323,13 @@ void aplicarFalla(uint8_t bit, bool activa, unsigned long t) {
 }
 
 // Version que toma el mutex (para llamar desde loop())
-void reportarFalla(uint8_t bit, bool activa) {
+bool reportarFalla(uint8_t bit, bool activa) {
   if (xSemaphoreTake(mutexDatos, pdMS_TO_TICKS(100)) == pdTRUE) {
     aplicarFalla(bit, activa, millis());
     xSemaphoreGive(mutexDatos);
+    return true;
   }
+  return false;                                  // se reintenta en la siguiente vuelta
 }
 
 Datos snapshotDatos() {
@@ -1062,7 +1064,9 @@ void tareaMQTT(void *parametro) {
   mqtt.setCallback(alRecibirMQTT);
 
   unsigned long ultimoIntento = 0, ultimaTelemetria = 0;
-  bool conectadoAntes = false;
+  // Se arranca como "conectado" para que, si el broker no esta desde el inicio,
+  // la primera vuelta ya marque la falla F_MQTT (OLED "-", aviso en el tablero).
+  bool conectadoAntes = true;
 
   for (;;) {
     unsigned long ahora = millis();
@@ -1073,8 +1077,7 @@ void tareaMQTT(void *parametro) {
       conectado = conectarMQTT();
     }
     if (conectado != conectadoAntes) {          // cambio de estado de la conexion
-      reportarFalla(F_MQTT, !conectado);
-      conectadoAntes = conectado;
+      if (reportarFalla(F_MQTT, !conectado)) conectadoAntes = conectado;
     }
 
     if (conectado) {
