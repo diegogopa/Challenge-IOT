@@ -1,0 +1,16 @@
+# /etc/mosquitto/aquamonitor.acl
+# Lista de acceso: que puede publicar (write) y leer (read) cada usuario.
+
+# Servicio del Gateway: lee y escribe todos los temas del proyecto
+user gateway
+topic readwrite aquamonitor/#
+
+# ESP32 de la estacion est01: solo sus propios temas
+user esp32_est01
+topic write aquamonitor/est01/telemetria
+topic write aquamonitor/est01/eventos
+topic write aquamonitor/est01/estado
+topic read  aquamonitor/est01/cmd
+topic read  aquamonitor/est01/ia
+
+# Para agregar otra estacion (est02), crear el usuario esp32_est02 y copiar el bloque anterior cambiando est01 por est02.

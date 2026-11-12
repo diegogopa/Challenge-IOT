@@ -1,0 +1,17 @@
+# /etc/systemd/system/aquamonitor-gateway.service
+[Unit]
+Description=AquaMonitor - Gateway IoT (MQTT -> SQLite -> IA -> Ubidots)
+After=network-online.target mosquitto.service
+Wants=network-online.target
+Requires=mosquitto.service
+
+[Service]
+Type=simple
+User=aquamonitor
+WorkingDirectory=/opt/aquamonitor/gateway
+ExecStart=/opt/aquamonitor/venv/bin/python /opt/aquamonitor/gateway/aquamonitor_gateway.py --config /opt/aquamonitor/gateway/gateway.ini
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

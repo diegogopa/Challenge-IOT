@@ -1,97 +1,103 @@
-# 💧 AquaMonitor v3.2 — Sistema IoT de monitoreo de disponibilidad y escasez de agua
+# 💧 AquaMonitor — Ecosistema IoT de monitoreo y alerta hídrica
 
-![Platform](https://img.shields.io/badge/platform-ESP32-blue)
-![Language](https://img.shields.io/badge/language-C%2B%2B%20(Arduino)-orange)
-![RTOS](https://img.shields.io/badge/FreeRTOS-tarea%20de%20sensado-green)
-![License](https://img.shields.io/badge/license-Academic-lightgrey)
+![ESP32](https://img.shields.io/badge/dispositivo-ESP32-blue)
+![Gateway](https://img.shields.io/badge/gateway-Raspberry%20Pi-c51a4a)
+![MQTT](https://img.shields.io/badge/protocolo-MQTT-660066)
+![Ubidots](https://img.shields.io/badge/nube-Ubidots-00a650)
 
-Prototipo IoT de bajo costo para monitorear puntos críticos de almacenamiento de agua en la región Sabana Centro (Cundinamarca) durante el fenómeno de El Niño 2026. Mide nivel de agua y variables meteorológicas, las combina mediante **lógica de fusión** y emite alertas **in situ** (OLED + buzzer) y en un **tablero de control web embebido** en el ESP32, accesible solo desde la WLAN de la zona.
+Ecosistema IoT de bajo costo para monitorear tanques y reservorios en la región Sabana Centro (Cundinamarca) durante el fenómeno de El Niño 2026. Mide nivel de agua y variables meteorológicas, las combina mediante **lógica de fusión**, alerta **en sitio** (OLED y buzzer) y en tableros **local** y **global**, y usa **IA** para pronosticar cuándo se llegará al nivel crítico y recomendar acciones.
 
+📖 **[Wiki del proyecto](../../wiki)** · 🎥 Video Challenge #3: `[ENLACE]`
 
----
+## Arquitectura (Challenge #3)
 
-## 👥 Equipo
+```
+ ┌──────────────────────┐  MQTT   ┌──────────────────────────────┐  MQTT/TLS  ┌──────────────┐
+ │ ESP32 · v4.0         │ ──────► │ Raspberry Pi · Gateway IoT   │ ─────────► │ Ubidots      │
+ │ sensores + fusión    │ ◄────── │ Mosquitto · SQLite · Python  │ ◄───────── │ tablero      │
+ │ OLED + buzzer        │ órdenes │ IA: pronóstico, anomalías,   │  silenciar │ global +     │
+ │ tablero local (WLAN) │   e IA  │ recomendación (Gemini)       │            │ notificación │
+ └──────────────────────┘         └──────────────────────────────┘            └──────────────┘
+```
 
-Universidad de La Sabana — Facultad de Ingeniería · Internet de las Cosas 2026-2
-
-| Integrante | Rol |
-|---|---|
-| Victor Andrés Luna | Hardware e integración |
-| Federico Valdez Muñoz | Software y pruebas |
-| Diego Alejandro Gómez | Documentación e integración |
-| **Profesor:** Andrés Felipe Beltrán | |
-
----
-
-## 🧩 Sensores y actuadores
-
-| Componente | Variable / función | Interfaz | Pin ESP32 |
-|---|---|---|---|
-| HC-SR04 | Distancia → nivel (%) | TRIG / ECHO | GPIO 5 / GPIO 18 |
-| DHT22 | Temperatura y humedad | 1 hilo | GPIO 4 |
-| GUVA-S12SD | Radiación UV → índice UV | ADC | GPIO 34 |
-| BMP180 | Presión atmosférica | I2C 0x77 | SDA 21 / SCL 23 |
-| OLED SH1106 128×64 | Visualización local | I2C 0x3C | SDA 21 / SCL 23 |
-| Buzzer activo | Alarma física | Digital | GPIO 33 |
-
----
-
-## 🧠 Lógica de fusión
-
-- **Nivel:** mediana de 5 disparos + EMA (α = 0.5), velocidad del sonido compensada con la temperatura del DHT22.
-- **Índice de evaporación (0–100):** 0.40·T + 0.30·UV + 0.30·(100 − HR), normalizados.
-- **Tendencia de presión:** caída ≥ 2 hPa en 3 h.
-
-| Estado | Regla (prioridad de arriba a abajo) |
-|---|---|
-| `ERROR_SENSOR` | 5 ciclos seguidos sin eco válido del HC-SR04 |
-| `DESBORDE` | nivel ≥ 95 % (sale con < 90 %) |
-| `FUGA` | el nivel baja y la pérdida real supera a la esperada por evaporación en ≥ 2.5 %/h |
-| `SEQUIA` | nivel ≤ 20 % (sale con > 25 %), **o** nivel ≤ 35 % con evaporación ≥ 70 (≥ 55 si la presión está cayendo) |
-| `OK` | ninguna de las anteriores |
-
-Además, cada componente (DHT22, BMP180, GUVA, ultrasónico, OLED, WiFi) tiene detección de falla y recuperación automática.
-
----
-
-## 🏗️ Arquitectura
-
-- **Tarea FreeRTOS `tareaSensado`** (núcleo 1): medición, filtrado, fusión, eventos e histórico — independiente del hilo principal.
-- **`loop()`**: buzzer, OLED, reconexión WiFi y verificación de la OLED.
-- **Servidor web asíncrono**: `GET /`, `GET /data`, `GET /historico`, `POST /silenciar`.
-- **Sincronización:** `mutexDatos` (datos compartidos) y `mutexI2C` (bus OLED + BMP180).
-- **Acceso al tablero:** solo IPs de la subred de la WLAN (403 si no) + usuario y contraseña (401 si no). Sin MQTT ni nube.
-- Si la WLAN cae, la medición y las alertas locales siguen funcionando.
-
----
-
-## 📁 Estructura del repositorio
+## Estructura del repositorio
 
 ```
 Challenge-IOT/
 ├── firmware/
-│   └── AquaMonitor_v3_2/
-│       └── AquaMonitor_v3_2.ino   # Firmware principal
-├── docs/
-│   ├── esquematico/               # Esquemático (PNG/PDF + fuente)
-│   ├── actas/                     # Actas de reunión
-│   ├── pruebas/                   # Datos crudos del banco de pruebas (CSV)
-│   └── fotos/                     # Prototipo, OLED y tablero
-└── README.md
+│   └── AquaMonitor_v4_0/AquaMonitor_v4_0.ino   # ESP32 (Challenge #3): medición + MQTT
+├── AquaMonitor_v3_2.ino                         # ESP32 (Challenge #2)
+├── gateway/                                     # Raspberry Pi
+│   ├── aquamonitor_gateway.py                   # MQTT → SQLite → procesamiento → Ubidots
+│   ├── ia.py                                    # pronóstico, anomalías, recomendación
+│   ├── schema.sql                               # base de datos local
+│   ├── gateway.example.ini                      # configuración (copiar como gateway.ini)
+│   ├── mosquitto/                               # broker con usuarios y lista de acceso
+│   ├── systemd/                                 # arranque automático
+│   ├── instalar_gateway.sh                      # instalación en la Raspberry Pi
+│   ├── simulador_esp32.py                       # pruebas sin hardware
+│   └── reporte_pruebas.py                       # persistencia, eventos, IA (y CSV)
+└── docs/
+    └── ubidots.md                               # tablero, notificaciones, interruptor y usuarios
 ```
 
+## Equipo
+
+Universidad de La Sabana — Internet de las Cosas 2026-2 · Profesor: Andrés Felipe Beltrán
+
+| Integrante | Capa a cargo (Challenge #3) |
+|---|---|
+| Federico Valdez Muñoz | Dispositivo IoT (firmware v4.0) e IA predictiva |
+| Victor Andrés Luna | Gateway IoT (Raspberry Pi, Mosquitto, SQLite) |
+| Diego Alejandro Gómez | Nube (Ubidots), IA generativa y documentación |
+
+## Puesta en marcha
+
+### 1. Gateway (Raspberry Pi)
+
+```bash
+cd gateway
+sudo bash instalar_gateway.sh            # Mosquitto, Python, usuarios MQTT y servicio
+sudo nano /opt/aquamonitor/gateway/gateway.ini   # token de Ubidots, clave de Gemini, claves MQTT
+sudo systemctl start aquamonitor-gateway
+journalctl -u aquamonitor-gateway -f
+```
+
+Detalles en [`gateway/README.md`](gateway/README.md).
+
+### 2. ESP32
+
+1. Arduino IDE con el núcleo **esp32 by Espressif** (verificado con 2.0.17) y la placa **ESP32 Dev Module**.
+2. Librerías: `DHT sensor library`, `Adafruit Unified Sensor`, `Adafruit GFX Library`, `Adafruit SH110X`, `Adafruit BMP085 Library`, `ESPAsyncWebServer`, `AsyncTCP`, **`PubSubClient`**.
+3. En `AquaMonitor_v4_0.ino`, completar `WIFI_SSID`, `WIFI_PASS`, `WEB_USER`, `WEB_PASS`, `MQTT_USER` y `MQTT_PASS`. `MQTT_HOST` viene como `aquamonitor.local` (el ESP32 encuentra la Raspberry por su nombre aunque cambie su IP); también acepta una IP fija.
+4. Cargar el código y abrir el monitor serie a 115200 baudios.
+
+### 3. Ubidots
+
+Seguir [`docs/ubidots.md`](docs/ubidots.md): token, tablero, notificaciones e interruptor "Silenciar".
+
+### Probar sin hardware
+
+```bash
+python3 gateway/simulador_esp32.py --host <IP_RPI> --user esp32_est01 --password <CLAVE> --escenario sequia --acelerado 120
+```
+
+## Lógica de fusión (dispositivo)
+
+| Estado | Regla |
+|---|---|
+| `ERROR_SENSOR` | 5 ciclos sin eco válido del HC-SR04 |
+| `DESBORDE` | nivel ≥ 95 % (sale con < 90 %) |
+| `FUGA` | el nivel baja y la pérdida real supera la esperada por evaporación en ≥ 2,5 %/h |
+| `SEQUIA` | nivel ≤ 20 % (sale con > 25 %), o nivel ≤ 35 % con evaporación ≥ 70 (≥ 55 si la presión cae) |
+| `OK` | ninguna de las anteriores |
+
+## Seguridad
+
+- Tablero local: solo la subred de la WLAN y usuario/contraseña.
+- Mosquitto: sin acceso anónimo; cada cliente con usuario y lista de temas permitidos.
+- Gateway ↔ Ubidots por TLS; el token y la clave de Gemini solo viven en `gateway.ini` en la Raspberry Pi (**ignorado por git**).
+
 ---
-
-## ⚙️ Compilación
-
-1. Arduino IDE con el núcleo **esp32 by Espressif Systems**; placa **ESP32 Dev Module**.
-2. Librerías: `DHT sensor library`, `Adafruit GFX Library`, `Adafruit SH110X`, `Adafruit BMP085 Library`, `ESPAsyncWebServer`, `AsyncTCP`.
-3. Editar `WIFI_SSID`, `WIFI_PASS`, `WEB_USER` y `WEB_PASS` (el repositorio solo tiene valores de ejemplo).
-4. Ajustar `DIST_TANQUE_LLENO` y `DIST_TANQUE_VACIO` a la geometría del tanque.
-5. Cargar, abrir el monitor serie a 115200 baudios y entrar a la IP que muestra la OLED desde un dispositivo de la misma WLAN.
-
----
-
-## 📄 Licencia
 
 Proyecto académico — Universidad de La Sabana, 2026-2.

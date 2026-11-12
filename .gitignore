@@ -1,0 +1,11 @@
+# Configuracion con claves reales del Gateway (token de Ubidots, Gemini, MQTT)
+gateway/gateway.ini
+# Bases de datos y resultados locales
+*.db
+*.db-wal
+*.db-shm
+resultados/
+__pycache__/
+*.pyc
+.venv/
+venv/
