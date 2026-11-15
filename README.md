@@ -53,7 +53,7 @@ Universidad de La Sabana — Internet de las Cosas 2026-2 · Profesor: Andrés F
 
 ## Puesta en marcha
 
-### 1. Gateway (Raspberry Pi)
+### 1. Gateway (Raspberry Pi 5)
 
 ```bash
 cd gateway

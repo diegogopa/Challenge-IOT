@@ -16,7 +16,7 @@ Ubidots (interruptor "silenciar") ──► Gateway ──► aquamonitor/est01/
 | Archivo | Qué es |
 |---|---|
 | `aquamonitor_gateway.py` | Servicio principal |
-| `ia.py` | Módulo de IA: regresión (pronóstico), z robusto (anomalías), Gemini o reglas (recomendación) |
+| `ia.py` | Módulo de IA: recta de Theil–Sen (pronóstico), z robusto (anomalías), Gemini o reglas (recomendación) |
 | `schema.sql` | Tablas de la base de datos |
 | `gateway.example.ini` | Configuración de ejemplo (copiar como `gateway.ini`, **no subirlo a GitHub**) |
 | `mosquitto/` | Configuración segura del broker y lista de acceso |
